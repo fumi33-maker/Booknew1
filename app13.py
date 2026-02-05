@@ -1,5 +1,4 @@
 import streamlit as st
-from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 import os
 from dotenv import load_dotenv
@@ -7,17 +6,17 @@ from dotenv import load_dotenv
 # 設定の読み込み
 load_dotenv()
 
-# ページの設定：ワイドモードで画面を広く使う
+# ページの設定：ワイドモード
 st.set_page_config(page_title="My Book Research", page_icon="📖", layout="wide")
 
 # --- デザイン調整：全体の文字を少し小さくするCSS ---
 st.markdown("""
     <style>
     html, body, [class*="st-"] {
-        font-size: 13px; /* 全体のフォントサイズ */
+        font-size: 13px;
     }
     div[data-testid="stDataFrame"] td {
-        font-size: 12px; /* 表の中の文字をさらに少し小さく */
+        font-size: 12px;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -45,7 +44,7 @@ def check_password():
 
 # --- メインコンテンツ（認証が通った時だけ表示） ---
 if check_password():
-    # --- サイドバーの設定（更新・ログアウト・コツ） ---
+    # --- サイドバーの設定 ---
     with st.sidebar:
         if st.button("🔄 データを最新にする"):
             st.cache_data.clear()
@@ -62,10 +61,24 @@ if check_password():
     # タイトル
     st.title("📖 本のリサーチ・コレクション")
 
-    # データ読み込み
-    url = os.getenv("SPREADSHEET_URL")
-    conn = st.connection("gsheets", type=GSheetsConnection)
-    df = conn.read(spreadsheet=url, ttl="5m", encoding="utf-8")
+    # --- データの読み込み処理（ここを大幅に変更） ---
+    @st.cache_data(ttl=300) # 5分間キャッシュ
+    def load_data_from_gsheets(url):
+        try:
+            # URLをCSVエクスポート形式に変換
+            csv_url = url.replace("/edit#gid=", "/export?format=csv&gid=")
+            if "/export" not in csv_url:
+                csv_url = url.split("/edit")[0] + "/export?format=csv"
+            
+            # pandasで読み込み
+            data = pd.read_csv(csv_url)
+            return data
+        except Exception as e:
+            st.error(f"データの読み込みに失敗しました: {e}")
+            return pd.DataFrame()
+
+    raw_url = os.getenv("SPREADSHEET_URL")
+    df = load_data_from_gsheets(raw_url)
     df = df.dropna(how="all")
 
     if not df.empty:
@@ -79,11 +92,15 @@ if check_password():
         # 2. 統計表示
         st.metric(label="リサーチ総数", value=f"{len(df)} 件")
         
-        # 3. 表の表示（スマホ対応・折り返し設定）
+        # 3. 表の表示
         st.subheader("📋 リサーチリスト")
         try:
-            # 巻とページで並び替え
-            display_df = df.sort_values(by=["巻", "ページ"]).reset_index(drop=True)
+            # 列名が存在するか確認してからソート（エラー防止）
+            sort_cols = [c for c in ["巻", "ページ"] if c in df.columns]
+            if sort_cols:
+                display_df = df.sort_values(by=sort_cols).reset_index(drop=True)
+            else:
+                display_df = df.reset_index(drop=True)
             
             # 列の設定
             st.dataframe(
@@ -95,13 +112,13 @@ if check_password():
                     "内容": st.column_config.TextColumn(
                         "内容", 
                         width=800, 
-                        wrap=True  # ← ここがスマホで全文読むためのポイント！
+                        wrap=True 
                     ),
                 },
-                hide_index=True, # 左側の数字を消してスッキリ
+                hide_index=True,
             )
         except Exception:
             st.dataframe(df, use_container_width=True)
     else:
-        st.info("スプレッドシートにデータがまだありません。")
-
+        st.info("データが読み込めないか、空っぽのようです。URLと共有設定を確認してね！")
+        
