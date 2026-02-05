@@ -47,17 +47,18 @@ if check_password():
     def load_data(url):
         try:
             # URLの末尾を強制的にCSV形式へ修正
-            if "pubhtml" in url:
-                url = url.replace("pubhtml", "pub?output=csv")
-            elif "output=" not in url:
-                url = url + ("&" if "?" in url else "?") + "output=csv"
+            target_url = url.replace("pubhtml", "pub?output=csv")
+            if "output=csv" not in target_url:
+                target_url = target_url + ("&" if "?" in target_url else "?") + "output=csv"
             
-            # 【重要】ブラウザのふりをしてGoogleのブロックを回避
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
-            req = urllib.request.Request(url, headers=headers)
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            req = urllib.request.Request(target_url, headers=headers)
             
             with urllib.request.urlopen(req) as response:
-                return pd.read_csv(response)
+                data = pd.read_csv(response)
+                # 【重要】列名の前後の空白を削除して、一致しやすくする
+                data.columns = [str(c).strip() for c in data.columns]
+                return data
         except Exception as e:
             st.error(f"データの取得に失敗しました。Error: {e}")
             return pd.DataFrame()
@@ -76,18 +77,26 @@ if check_password():
 
             st.metric(label="リサーチ総数", value=f"{len(df)} 件")
             
-            # 列の存在チェックをしてから並び替え
+            # 列の存在チェックをしてから表示
+            col_configs = {}
+            if "内容" in df.columns:
+                col_configs["内容"] = st.column_config.TextColumn("内容", width=800, wrap=True)
+            if "巻" in df.columns:
+                col_configs["巻"] = st.column_config.NumberColumn("巻", width=40)
+            if "ページ" in df.columns:
+                col_configs["ページ"] = st.column_config.NumberColumn("頁", width=40)
+
+            # 並び替え（存在する列のみ）
             sort_cols = [c for c in ["巻", "ページ"] if c in df.columns]
             display_df = df.sort_values(by=sort_cols).reset_index(drop=True) if sort_cols else df
             
+            # エラー回避のため、configを安全に適用
             st.dataframe(
                 display_df,
                 use_container_width=True,
-                column_config={
-                    "内容": st.column_config.TextColumn("内容", width=800, wrap=True),
-                },
+                column_config=col_configs,
                 hide_index=True
             )
         else:
-            st.info("データが空か、読み込めませんでした。URLを再確認してね。")
+            st.info("データが空か、読み込めませんでした。")
             
