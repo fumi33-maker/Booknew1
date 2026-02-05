@@ -1,79 +1,100 @@
 import streamlit as st
+from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 import os
 from dotenv import load_dotenv
 
+# 設定の読み込み
 load_dotenv()
 
+# ページの設定（少し広く、可愛く）
 st.set_page_config(page_title="My Book Research", page_icon="📖", layout="wide")
 
-# --- パスワード認証 ---
+# --- パスワード認証機能（ここを追加） ---
 def check_password():
     if "password_correct" not in st.session_state:
         st.session_state["password_correct"] = False
+
     if st.session_state["password_correct"]:
         return True
+
+    # ログイン画面の表示
     st.title("🔒 認証が必要です")
     pwd = st.text_input("合言葉を入力してください", type="password")
+    
     if st.button("ログイン"):
-        if pwd == os.getenv("APP_PASSWORD"):
+        target_pwd = os.getenv("APP_PASSWORD")
+        if pwd == target_pwd:
             st.session_state["password_correct"] = True
             st.rerun()
         else:
             st.error("合言葉が違います。")
     return False
 
+# --- メインコンテンツ（認証が通った時だけ表示） ---
 if check_password():
+    # タイトル
     st.title("📖 本のリサーチ・コレクション")
 
-    # キャッシュをクリアしやすく設定
-    @st.cache_data(ttl=10)
-    def load_data(url):
-        try:
-            # 直接pandasで読み込む（これが一番エラーが出にくい）
-            df = pd.read_csv(url)
-            # 列名の前後に空白があれば削除
-            df.columns = [str(c).strip() for c in df.columns]
-            return df
-        except Exception as e:
-            st.error(f"取得エラー: {e}")
-            return pd.DataFrame()
+    # --- データ読み込み ---
+    url = os.getenv("SPREADSHEET_URL")
+    conn = st.connection("gsheets", type=GSheetsConnection)
 
-    # SecretsからURLを取得
-    csv_url = os.getenv("SPREADSHEET_URL")
-    
-    if csv_url:
-        df = load_data(csv_url)
+    # データを読み込んで、空行を削除
+    # エラー対策で encoding="utf-8" を念のため追加
+    df = conn.read(spreadsheet=url, ttl="5m", encoding="utf-8")
+    df = df.dropna(how="all")
+
+    if not df.empty:
+        # --- 1. 検索機能エリア ---
+        st.subheader("🔍 検索・絞り込み")
+        search_query = st.text_input("キーワードを入力してね（巻数や内容など）", "")
+
+        # 検索機能のロジック
+        if search_query:
+            df = df[df.astype(str).apply(lambda x: x.str.contains(search_query, case=False)).any(axis=1)]
+
+        # --- 2. 統計表示 ---
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric(label="リサーチ総数", value=f"{len(df)} 件")
         
-        if not df.empty:
-            # Googleのログイン画面を誤って読んだ場合の対策
-            if "Copyright" in str(df.columns) or "html" in str(df.columns).lower():
-                st.error("まだGoogleが古いデータを返しています。数分待つか、Rebootしてください。")
-            else:
-                st.subheader("🔍 検索")
-                search_query = st.text_input("キーワード入力", "")
-                
-                # 検索処理
-                if search_query:
-                    df = df[df.astype(str).apply(lambda x: x.str.contains(search_query, case=False, na=False)).any(axis=1)]
+        # --- 3. 表の表示 ---
+        st.subheader("📋 リサーチリスト")
+        
+        try:
+            display_df = df.sort_values(by=["巻", "ページ"]).reset_index(drop=True)
+            
+            st.dataframe(
+                display_df.style.set_properties(**{
+                    'background-color': '#f0f2f6',
+                    'color': '#31333F',
+                    'border-color': 'white'
+                }).highlight_max(axis=0, subset=['巻'], color='#ffebf0'),
+                use_container_width=True
+            )
+        except Exception:
+            st.dataframe(df, use_container_width=True)
 
-                st.metric(label="リサーチ総数", value=f"{len(df)} 件")
-                
-                # 列の設定（巻、ページ、内容に対応）
-                col_configs = {
-                    "巻": st.column_config.NumberColumn("巻", width=60),
-                    "ページ": st.column_config.NumberColumn("ページ", width=60),
-                    "内容": st.column_config.TextColumn("内容", width=800, wrap=True)
-                }
+        # --- 4. 更新ボタン ---
+        if st.sidebar.button("🔄 データを最新にする"):
+            st.cache_data.clear()
+            st.rerun()
+        
+        # ログアウトボタンも追加
+        if st.sidebar.button("🔓 ログアウト"):
+            st.session_state["password_correct"] = False
+            st.rerun()
 
-                # 表示
-                st.dataframe(
-                    df,
-                    use_container_width=True,
-                    column_config=col_configs,
-                    hide_index=True
-                )
-        else:
-            st.info("データが空か、読み込み中です。")
     else:
-        st.warning("URLが設定されていません。")
+        st.info("スプレッドシートにデータがまだありません。入力して待っててね！")
+
+    # サイドバーのメッセージ
+    st.sidebar.markdown("---")
+    st.sidebar.write("💡 **コツ**")
+    st.sidebar.caption("スプレッドシートを更新したら、上のボタンを押すとすぐに反映されるよ！")
+
+
+    
+
+
